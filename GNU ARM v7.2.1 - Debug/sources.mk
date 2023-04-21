@@ -18,7 +18,6 @@ C_DEPS :=
 SUBDIRS := \
 BSP \
 CMSIS/EFM32GG \
-Drivers \
 FreeRTOS/efm32gg \
 emlib \
 src \

@@ -40,25 +40,31 @@
 
 /* Structure with parameters for LedBlink */
 typedef struct {
-
+  /* Delay between blink of led */
+  portTickType delay;
+  /* Number of led */
+  int          ledNo;
 } TaskParams_t;
 
 /***************************************************************************//**
  * @brief Simple task which is blinking led
  * @param *pParameters pointer to parameters passed to the function
  ******************************************************************************/
-static void TestTask(void *pParameters)
+static void LedBlink(void *pParameters)
 {
-  for (;; ) {
-	  // Test here
+  TaskParams_t     * pData = (TaskParams_t*) pParameters;
+  const portTickType delay = pData->delay;
 
+  for (;; ) {
+    BSP_LedToggle(pData->ledNo);
+    vTaskDelay(delay);
   }
 }
 
 /***************************************************************************//**
  * @brief  Main function
  ******************************************************************************/
-int main(void)
+int main2(void)
 {
   /* Chip errata */
   CHIP_Init();
@@ -67,6 +73,9 @@ int main(void)
 
   /* Initialize LED driver */
   BSP_LedsInit();
+  /* Setting state of leds*/
+  BSP_LedSet(0);
+  BSP_LedSet(1);
 
   /* Initialize SLEEP driver, no calbacks are used */
   //SLEEP_Init(NULL, NULL);
@@ -75,16 +84,13 @@ int main(void)
   SLEEP_SleepBlockBegin((SLEEP_EnergyMode_t)(configSLEEP_MODE + 1));
 #endif
 
-
-  i2c_initSemaphore();
-  BSP_I2C_Init();
-
-  // ------- Main Code -------
   /* Parameters value for taks*/
-  static TaskParams_t parametersToTask1 = {  };
+  static TaskParams_t parametersToTask1 = { pdMS_TO_TICKS(1000), 0 };
+  static TaskParams_t parametersToTask2 = { pdMS_TO_TICKS(500), 1 };
 
   /*Create two task for blinking leds*/
-  xTaskCreate(TestTask, (const char *) "TestTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
+  xTaskCreate(LedBlink, (const char *) "LedBlink1", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
+  xTaskCreate(LedBlink, (const char *) "LedBlink2", STACK_SIZE_FOR_TASK, &parametersToTask2, TASK_PRIORITY, NULL);
 
   /*Start FreeRTOS Scheduler*/
   vTaskStartScheduler();
