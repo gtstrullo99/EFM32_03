@@ -38,6 +38,9 @@
 #define STACK_SIZE_FOR_TASK    (configMINIMAL_STACK_SIZE + 10)
 #define TASK_PRIORITY          (tskIDLE_PRIORITY + 1)
 
+#define ADDR_MAGNET 0x3D
+#define ADDR_GA 0xD7
+
 /* Structure with parameters for LedBlink */
 typedef struct {
 
@@ -49,8 +52,16 @@ typedef struct {
  ******************************************************************************/
 static void TestTask(void *pParameters)
 {
+	uint8_t data_H = 0, data_L = 0;
+	int16_t data;
+
   for (;; ) {
 	  // Test here
+	  I2C_ReadRegister(0x28, data_L, ADDR_GA);
+	  I2C_ReadRegister(0x29, data_H, ADDR_GA);
+	  data = data_H << 8 | data_L;
+
+	  printf("Data XL X: %i\n", data);
 
   }
 }
@@ -76,12 +87,19 @@ int main(void)
 #endif
 
 
-  i2c_initSemaphore();
+  int ret = i2c_initSemaphore();
+
+  printf("InitSemaphore: %d \n", ret);
+
   BSP_I2C_Init();
+
+  I2C_Test(ADDR_GA, ADDR_MAGNET);
 
   // ------- Main Code -------
   /* Parameters value for taks*/
   static TaskParams_t parametersToTask1 = {  };
+
+
 
   /*Create two task for blinking leds*/
   xTaskCreate(TestTask, (const char *) "TestTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);

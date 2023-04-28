@@ -10,17 +10,24 @@
 #include "em_gpio.h"
 #include "em_cmu.h"
 
-static uint8_t device_addr;
-
 SemaphoreHandle_t xSemaphore;
+
+int _write(int file, const char *ptr, int len) {
+    int x;
+    for (x = 0; x < len; x++) {
+       ITM_SendChar (*ptr++);
+    }
+    return (len);
+}
 
 int i2c_initSemaphore()
 {
 	xSemaphore = xSemaphoreCreateBinary();
+	xSemaphoreGive(xSemaphore);
 	return xSemaphore != NULL;
 }
 
-void BSP_I2C_Init(uint8_t addr) {
+void BSP_I2C_Init() {
 
 	xSemaphoreTake(xSemaphore, portMAX_DELAY);
 
@@ -32,8 +39,6 @@ void BSP_I2C_Init(uint8_t addr) {
 	I2C_ROUTE_SCLPEN | I2C_ROUTE_LOCATION_LOC0;
 	I2C_Init(I2C1, &i2cInit);
 
-	device_addr = addr;
-
 	xSemaphoreGive(xSemaphore);
 }
 
@@ -43,7 +48,7 @@ void BSP_I2C_Init(uint8_t addr) {
  * @param data data to write
  * @return true on success
  */
-bool I2C_WriteRegister(uint8_t reg, uint8_t data) {
+bool I2C_WriteRegister(uint8_t reg, uint8_t data, uint8_t device_addr) {
 
 	xSemaphoreTake(xSemaphore, portMAX_DELAY);
 
@@ -84,7 +89,7 @@ bool I2C_WriteRegister(uint8_t reg, uint8_t data) {
  * @param val Value read
  * @return true on success
  */
-bool I2C_ReadRegister(uint8_t reg, uint8_t *val) {
+bool I2C_ReadRegister(uint8_t reg, uint8_t *val, uint8_t device_addr) {
 
 	xSemaphoreTake(xSemaphore, portMAX_DELAY);
 
@@ -107,6 +112,7 @@ bool I2C_ReadRegister(uint8_t reg, uint8_t *val) {
 	}
 
 	if (I2C_Status != i2cTransferDone) {
+		xSemaphoreGive(xSemaphore);
 		return false;
 	}
 
@@ -116,20 +122,16 @@ bool I2C_ReadRegister(uint8_t reg, uint8_t *val) {
 	return true;
 }
 
-bool I2C_Test() {
-	xSemaphoreTake(xSemaphore, portMAX_DELAY);
-	uint8_t data;
+bool I2C_Test(uint8_t addr_ga, uint8_t addr_m) {
+	uint8_t data_gyro, data_magnet;
 
-	I2C_ReadRegister(0xD0, &data);
+	I2C_ReadRegister(0x0F, &data_gyro, addr_ga);
+	I2C_ReadRegister(0x0F, &data_magnet, addr_m);
 
-	printf("I2C: %02X\n", data);
+	printf("I2C gyro: %02X \n Valor esperat: %02X \n", data_gyro, 0b01101000);
 
-	if (data == 0x60) {
-		return true;
-	} else {
-		return false;
-	}
-	xSemaphoreTake(xSemaphore, portMAX_DELAY);
+	printf("I2C Magnet: %02X \n Valor esperat: %02X \n", data_magnet, 0b00111101);
 
+	return data_gyro == 0b01101000 && data_magnet == 0b00111101;
 }
 
