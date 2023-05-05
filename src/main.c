@@ -41,28 +41,61 @@
 #define ADDR_MAGNET 0x3D
 #define ADDR_GA 0xD7
 
+#define LOOP 1
+
 /* Structure with parameters for LedBlink */
 typedef struct {
+	QueueHandle_t accXQueue;
+} TaskParams_1_2_t;
 
-} TaskParams_t;
+typedef struct {
+	int hasHit;
+} TaskParams_2_3_t;
 
 /***************************************************************************//**
  * @brief Simple task which is blinking led
  * @param *pParameters pointer to parameters passed to the function
  ******************************************************************************/
-static void TestTask(void *pParameters)
+static void WriteOutputTask(void *pParameters)
 {
+	TaskParams_1_2_t *params = (TaskParams_1_2_t *)pParameters;
+	int16_t receivedData;
+	for(;;)
+	{
+		if (xQueueReceive(params->accXQueue, &receivedData, portMAX_DELAY) == pdPASS) {
+			// Failed to receive data from the queue
+			printf("Data XL X: %i\n", receivedData);
+		}
+	}
+}
+static void ReadI2CTask(void *pParameters)
+{
+	TaskParams_1_2_t *params = (TaskParams_1_2_t *)pParameters;
+	I2C_WriteRegister(0x20, 1 << 6, ADDR_GA); // Activar acc
+	I2C_WriteRegister(0x10, 1 << 6, ADDR_GA); // Activar gyro
 	uint8_t data_H = 0, data_L = 0;
 	int16_t data;
 
-  for (;; ) {
-	  // Test here
-	  I2C_ReadRegister(0x28, data_L, ADDR_GA);
-	  I2C_ReadRegister(0x29, data_H, ADDR_GA);
-	  data = data_H << 8 | data_L;
+    if(LOOP)
+    {
+	  for (;; ) {
+		  // Test acc
+		  I2C_ReadRegister(0x28, &data_L, ADDR_GA);
+		  I2C_ReadRegister(0x29, &data_H, ADDR_GA);
+		  data = data_H << 8 | data_L;
+		  xQueueSend(params->accXQueue, &data, 0);
+		  //printf("Data XL X: %i\t", data);
 
-	  printf("Data XL X: %i\n", data);
+		  // Test gyro
+		  I2C_ReadRegister(0x18, &data_L, ADDR_GA);
+		  I2C_ReadRegister(0x19, &data_H, ADDR_GA);
+		  data = data_H << 8 | data_L;
 
+		  // Test magnet
+		  I2C_ReadRegister(0x28, &data_L, ADDR_MAGNET);
+		  I2C_ReadRegister(0x29, &data_H, ADDR_MAGNET);
+		  data = data_H << 8 | data_L;
+    }
   }
 }
 
@@ -97,12 +130,16 @@ int main(void)
 
   // ------- Main Code -------
   /* Parameters value for taks*/
-  static TaskParams_t parametersToTask1 = {  };
+  QueueHandle_t accXQueue = xQueueCreate(10, sizeof(int16_t));
+  static TaskParams_1_2_t parametersToTask1;
+  parametersToTask1.accXQueue = accXQueue;
 
 
 
   /*Create two task for blinking leds*/
-  xTaskCreate(TestTask, (const char *) "TestTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
+  xTaskCreate(ReadI2CTask, (const char *) "ReadI2CTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
+  xTaskCreate(WriteOutputTask, (const char *) "WriteOutputTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
+
 
   /*Start FreeRTOS Scheduler*/
   vTaskStartScheduler();
