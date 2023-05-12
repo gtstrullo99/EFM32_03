@@ -1,20 +1,3 @@
-/***************************************************************************//**
- * @file
- * @brief FreeRTOS Blink Demo for Energy Micro EFM32GG_STK3700 Starter Kit
- *******************************************************************************
- * # License
- * <b>Copyright 2018 Silicon Laboratories Inc. www.silabs.com</b>
- *******************************************************************************
- *
- * The licensor of this software is Silicon Laboratories Inc. Your use of this
- * software is governed by the terms of Silicon Labs Master Software License
- * Agreement (MSLA) available at
- * www.silabs.com/about-us/legal/master-software-license-agreement. This
- * software is distributed to you in Source Code format and is governed by the
- * sections of the MSLA applicable to Source Code.
- *
- ******************************************************************************/
-
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,8 +12,6 @@
 #include "bsp.h"
 #include "bsp_trace.h"
 
-#include "sleep.h"
-
 // Own includes
 #include "my_i2c.h"
 // -------
@@ -41,62 +22,106 @@
 #define ADDR_MAGNET 0x3D
 #define ADDR_GA 0xD7
 
-#define LOOP 1
+#define COLLISION_THRESHOLD 50e6
+#define LED_DELAY pdMS_TO_TICKS(3000)
 
-/* Structure with parameters for LedBlink */
-typedef struct {
-	QueueHandle_t accXQueue;
-} TaskParams_1_2_t;
 
 typedef struct {
-	int hasHit;
-} TaskParams_2_3_t;
+	QueueHandle_t accQueue;
+} TaskParams_1_t;
 
-/***************************************************************************//**
- * @brief Simple task which is blinking led
- * @param *pParameters pointer to parameters passed to the function
- ******************************************************************************/
+typedef struct {
+	QueueHandle_t accQueue;
+	QueueHandle_t moduleQueue;
+} TaskParams_2_t;
+
+typedef struct {
+	QueueHandle_t moduleQueue;
+} TaskParams_3_t;
+
+typedef struct {
+	int16_t X;
+	int16_t Y;
+	int16_t Z;
+} queueVector;
+
+
 static void WriteOutputTask(void *pParameters)
 {
-	TaskParams_1_2_t *params = (TaskParams_1_2_t *)pParameters;
-	int16_t receivedData;
+	TaskParams_3_t *params = (TaskParams_3_t *)pParameters;
+	int32_t receivedData;
+	TickType_t startTime;
+	int isOn = 0;
+	float gs;
 	for(;;)
 	{
-		if (xQueueReceive(params->accXQueue, &receivedData, portMAX_DELAY) == pdPASS) {
-			// Failed to receive data from the queue
-			printf("Data XL X: %i\n", receivedData);
+		if (xQueueReceive(params->moduleQueue, &receivedData, portMAX_DELAY) == pdPASS) {
+			if(receivedData > COLLISION_THRESHOLD)
+			{
+				//gs = sqrt(receivedData) / 0xFF * 16;
+				printf("Colisio: %0.02f gs\n", gs);
+				isOn = 1;
+				BSP_LedSet(0);
+				startTime = xTaskGetTickCount();
+			}
+		}
+
+		if(isOn && xTaskGetTickCount() > startTime + LED_DELAY)
+		{
+			isOn = 0;
+			BSP_LedClear(0);
 		}
 	}
 }
+
+static void CalculateModule(void *pParameters)
+{
+	TaskParams_2_t *params = (TaskParams_2_t *)pParameters;
+	queueVector receivedData;
+	int32_t module_result;
+
+	for(;;)
+	{
+		if (xQueueReceive(params->accQueue, &receivedData, portMAX_DELAY) == pdPASS) {
+			module_result = (receivedData.X*receivedData.X) + (receivedData.Y*receivedData.Y) + (receivedData.Z*receivedData.Z);
+			xQueueSend(params->moduleQueue, &module_result, 0);
+		}
+
+	}
+}
+
 static void ReadI2CTask(void *pParameters)
 {
-	TaskParams_1_2_t *params = (TaskParams_1_2_t *)pParameters;
-	I2C_WriteRegister(0x20, 1 << 6, ADDR_GA); // Activar acc
+	TaskParams_1_t *params = (TaskParams_1_t *)pParameters;
+	I2C_WriteRegister(0x20, 1 << 6 | 1 << 3, ADDR_GA); // Activar acc
 	I2C_WriteRegister(0x10, 1 << 6, ADDR_GA); // Activar gyro
 	uint8_t data_H = 0, data_L = 0;
 	int16_t data;
 
-    if(LOOP)
-    {
-	  for (;; ) {
-		  // Test acc
-		  I2C_ReadRegister(0x28, &data_L, ADDR_GA);
-		  I2C_ReadRegister(0x29, &data_H, ADDR_GA);
-		  data = data_H << 8 | data_L;
-		  xQueueSend(params->accXQueue, &data, 0);
-		  //printf("Data XL X: %i\t", data);
+	queueVector qVector;
 
-		  // Test gyro
-		  I2C_ReadRegister(0x18, &data_L, ADDR_GA);
-		  I2C_ReadRegister(0x19, &data_H, ADDR_GA);
-		  data = data_H << 8 | data_L;
+	for (;; ) {
+	  // AccX
+	  I2C_ReadRegister(0x28, &data_L, ADDR_GA);
+	  I2C_ReadRegister(0x29, &data_H, ADDR_GA);
+	  data = data_H << 8 | data_L;
+	  qVector.X = data;
 
-		  // Test magnet
-		  I2C_ReadRegister(0x28, &data_L, ADDR_MAGNET);
-		  I2C_ReadRegister(0x29, &data_H, ADDR_MAGNET);
-		  data = data_H << 8 | data_L;
-    }
-  }
+	  // AccY
+	  I2C_ReadRegister(0x2A, &data_L, ADDR_GA);
+	  I2C_ReadRegister(0x2B, &data_H, ADDR_GA);
+	  data = data_H << 8 | data_L;
+	  qVector.Y = data;
+
+	  // AccZ
+	  I2C_ReadRegister(0x2C, &data_L, ADDR_GA);
+	  I2C_ReadRegister(0x2D, &data_H, ADDR_GA);
+	  data = data_H << 8 | data_L;
+	  qVector.Z = data;
+
+	  xQueueSend(params->accQueue, &qVector, 0);
+
+	}
 }
 
 /***************************************************************************//**
@@ -111,6 +136,11 @@ int main(void)
 
   /* Initialize LED driver */
   BSP_LedsInit();
+  /* Setting state of leds*/
+  BSP_LedSet(0);
+  BSP_LedSet(1);
+  BSP_LedClear(0);
+  BSP_LedClear(1);
 
   /* Initialize SLEEP driver, no calbacks are used */
   //SLEEP_Init(NULL, NULL);
@@ -130,16 +160,22 @@ int main(void)
 
   // ------- Main Code -------
   /* Parameters value for taks*/
-  QueueHandle_t accXQueue = xQueueCreate(10, sizeof(int16_t));
-  static TaskParams_1_2_t parametersToTask1;
-  parametersToTask1.accXQueue = accXQueue;
+  QueueHandle_t accQueue = xQueueCreate(10, sizeof(queueVector));
+  QueueHandle_t moduleQueue = xQueueCreate(10, sizeof(int32_t));
 
+  static TaskParams_1_t parametersToTask1;
+  static TaskParams_2_t parametersToTask2;
+  static TaskParams_3_t parametersToTask3;
 
+  parametersToTask1.accQueue = accQueue;
+  parametersToTask2.accQueue = accQueue;
+  parametersToTask2.moduleQueue = moduleQueue;
+  parametersToTask3.moduleQueue = moduleQueue;
 
   /*Create two task for blinking leds*/
   xTaskCreate(ReadI2CTask, (const char *) "ReadI2CTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
-  xTaskCreate(WriteOutputTask, (const char *) "WriteOutputTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
-
+  xTaskCreate(CalculateModule, (const char *) "CalculateModule", STACK_SIZE_FOR_TASK, &parametersToTask2, TASK_PRIORITY, NULL);
+  xTaskCreate(WriteOutputTask, (const char *) "WriteOutputTask", STACK_SIZE_FOR_TASK, &parametersToTask3, TASK_PRIORITY, NULL);
 
   /*Start FreeRTOS Scheduler*/
   vTaskStartScheduler();
