@@ -23,7 +23,7 @@
 #define ADDR_GA 0xD7
 
 #define COLLISION_THRESHOLD 50e6
-#define LED_DELAY pdMS_TO_TICKS(3000)
+#define COLLISION_DELAY pdMS_TO_TICKS(500)
 
 
 typedef struct {
@@ -37,7 +37,12 @@ typedef struct {
 
 typedef struct {
 	QueueHandle_t moduleQueue;
+	QueueHandle_t buttonQueue;
 } TaskParams_3_t;
+
+typedef struct {
+	QueueHandle_t buttonQueue;
+} TaskParams_4_t;
 
 typedef struct {
 	int16_t X;
@@ -45,31 +50,71 @@ typedef struct {
 	int16_t Z;
 } queueVector;
 
+static void ReadButtonTask(void *pParameters)
+{
+	TaskParams_4_t *params = (TaskParams_4_t *)pParameters;
+	uint8_t res;
+	GPIO_PinModeSet(gpioPortB, 9, gpioModeInputPull, 1); // Assuming pull-up resistor
 
-static void WriteOutputTask(void *pParameters)
+	for(;;)
+	{
+		res = !GPIO_PinInGet(gpioPortB, 9);
+		xQueueSend(params->buttonQueue, &res, 0);
+	}
+}
+
+static void AirbagControlTask(void *pParameters)
 {
 	TaskParams_3_t *params = (TaskParams_3_t *)pParameters;
 	int32_t receivedData;
+	uint8_t buttonPressed;
 	TickType_t startTime;
 	int isOn = 0;
-	float gs;
+	int isColliding = 0;
+	int lastButttonPressed = 0;
 	for(;;)
 	{
 		if (xQueueReceive(params->moduleQueue, &receivedData, portMAX_DELAY) == pdPASS) {
-			if(receivedData > COLLISION_THRESHOLD)
+			if(receivedData > COLLISION_THRESHOLD && !isOn && !isColliding)
 			{
-				//gs = sqrt(receivedData) / 0xFF * 16;
-				printf("Colisio: %0.02f gs\n", gs);
+				//printf("Colisio: %li\n", receivedData);
+				printf("Colisio: Airbags activats! \n");
+
 				isOn = 1;
 				BSP_LedSet(0);
+
 				startTime = xTaskGetTickCount();
+				isColliding = 1;
+			}
+			else if(receivedData > COLLISION_THRESHOLD && isOn && !isColliding)
+			{
+				printf("Colisio sense airbags: PERILL! \n");
+				startTime = xTaskGetTickCount();
+				isColliding = 1;
 			}
 		}
 
-		if(isOn && xTaskGetTickCount() > startTime + LED_DELAY)
+
+		if (xQueueReceive(params->buttonQueue, &buttonPressed, portMAX_DELAY) == pdPASS) {
+			if (lastButttonPressed != buttonPressed)
+			{
+				if(buttonPressed && isOn)
+				{
+					printf("Airbags recargats. \n");
+					isOn = 0;
+					BSP_LedClear(0);
+				}
+				else if(buttonPressed && !isOn)
+				{
+					printf("Error: Airbags ja recargats. \n");
+				}
+				lastButttonPressed = buttonPressed;
+			}
+		}
+
+		if(isColliding && xTaskGetTickCount() > startTime + COLLISION_DELAY)
 		{
-			isOn = 0;
-			BSP_LedClear(0);
+			isColliding = 0;
 		}
 	}
 }
@@ -162,20 +207,25 @@ int main(void)
   /* Parameters value for taks*/
   QueueHandle_t accQueue = xQueueCreate(10, sizeof(queueVector));
   QueueHandle_t moduleQueue = xQueueCreate(10, sizeof(int32_t));
+  QueueHandle_t buttonQueue = xQueueCreate(10, sizeof(uint8_t));
 
   static TaskParams_1_t parametersToTask1;
   static TaskParams_2_t parametersToTask2;
   static TaskParams_3_t parametersToTask3;
+  static TaskParams_4_t parametersToTask4;
 
   parametersToTask1.accQueue = accQueue;
   parametersToTask2.accQueue = accQueue;
   parametersToTask2.moduleQueue = moduleQueue;
   parametersToTask3.moduleQueue = moduleQueue;
+  parametersToTask3.buttonQueue = buttonQueue;
+  parametersToTask4.buttonQueue = buttonQueue;
 
   /*Create two task for blinking leds*/
   xTaskCreate(ReadI2CTask, (const char *) "ReadI2CTask", STACK_SIZE_FOR_TASK, &parametersToTask1, TASK_PRIORITY, NULL);
   xTaskCreate(CalculateModule, (const char *) "CalculateModule", STACK_SIZE_FOR_TASK, &parametersToTask2, TASK_PRIORITY, NULL);
-  xTaskCreate(WriteOutputTask, (const char *) "WriteOutputTask", STACK_SIZE_FOR_TASK, &parametersToTask3, TASK_PRIORITY, NULL);
+  xTaskCreate(AirbagControlTask, (const char *) "AirbagControlTask", STACK_SIZE_FOR_TASK, &parametersToTask3, TASK_PRIORITY, NULL);
+  xTaskCreate(ReadButtonTask, (const char *) "ReadButtonTask", STACK_SIZE_FOR_TASK, &parametersToTask4, TASK_PRIORITY, NULL);
 
   /*Start FreeRTOS Scheduler*/
   vTaskStartScheduler();
